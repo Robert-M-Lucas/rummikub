@@ -3,7 +3,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use crate::{Colour, State, Tile};
 
-#[derive(Hash)]
+#[derive(Clone, Hash)]
 pub struct SolvingState {
     unused_board_tiles: VecDeque<Tile>,
     unused_hand_tiles: VecDeque<Tile>,
@@ -56,17 +56,6 @@ impl SolvingState {
     }
 }
 
-impl Clone for SolvingState {
-    #[time_graph::instrument]
-    fn clone(&self) -> Self {
-        SolvingState {
-            unused_hand_tiles: self.unused_hand_tiles.clone(),
-            unused_board_tiles: self.unused_board_tiles.clone(),
-            runs: self.runs.clone()
-        }
-    }
-}
-
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 enum RunType {
     Number(u8),
@@ -74,21 +63,19 @@ enum RunType {
     Unknown
 }
 
-#[derive(Hash)]
+#[derive(Clone, Hash)]
 struct Run {
     tiles: VecDeque<Tile>,
     kind: RunType
 }
 
 impl Run {
-    #[time_graph::instrument]
     pub fn new(tile: Tile) -> Run {
         let mut tiles = VecDeque::with_capacity(3);
         tiles.push_back(tile);
         Run { tiles, kind: RunType::Unknown }
     }
 
-    #[time_graph::instrument]
     pub fn join(&self, tile: &Tile) -> (Option<Run>, Option<Run>) {
         fn prepend(s: &Run, t: &Tile, k: RunType) -> Run {
             let mut run = s.clone();
@@ -205,30 +192,17 @@ impl Run {
     }
 }
 
-impl Clone for Run {
-    #[time_graph::instrument]
-    fn clone(&self) -> Self {
-        Run {
-            tiles: self.tiles.clone(),
-            kind: self.kind.clone()
-        }
-    }
-}
-
 pub fn solve(state: &State) -> SolvingState {
     let mut visited = HashSet::new();
     solve_state(SolvingState::from_state(state), &mut visited).unwrap()
 }
 
-#[time_graph::instrument]
-fn hash_check(state: &SolvingState, visited_hashes: &mut HashSet<u64>) -> bool {
+pub fn solve_state(state: SolvingState, visited_hashes: &mut HashSet<u64>) -> Option<SolvingState> {
     let mut hasher = DefaultHasher::new();
     state.hash(&mut hasher);
-    visited_hashes.insert(hasher.finish())
-}
-
-pub fn solve_state(state: SolvingState, visited_hashes: &mut HashSet<u64>) -> Option<SolvingState> {
-    if !hash_check(&state, visited_hashes) { return None; }
+    if !visited_hashes.insert(hasher.finish()) {
+        return None;
+    }
 
     if state.unused_board_tiles.len() == 0 && state.unused_hand_tiles.len() == 0 { return Some(state); }
 
@@ -242,49 +216,35 @@ pub fn solve_state(state: SolvingState, visited_hashes: &mut HashSet<u64>) -> Op
             let new_runs = r.join(t);
 
             if new_runs.0.is_some() {
-                if let Some(value) = creation(&state, visited_hashes, &mut best, j, &mut board, i, new_runs) {
-                    return value;
+                let mut new_state = state.clone();
+                new_state.runs[i] = new_runs.0.unwrap();
+                if new_runs.1.is_some() {
+                    new_state.runs.push(new_runs.1.unwrap());
                 }
+                if board {
+                    new_state.unused_board_tiles.remove(j);
+                }
+                else {
+                    new_state.unused_hand_tiles.remove(j);
+                }
+                best = SolvingState::best( best,solve_state(new_state, visited_hashes));
+                if best.is_some() && best.as_ref().unwrap().solved() { return best; }
             }
         }
 
         if state.runs.last().is_none() || state.runs.last().unwrap().tiles.len() >= 3 {
-            if let Some(value) = creation_two(&state, visited_hashes, &mut best, j, t, &mut board) {
-                return value;
+            let mut new_state = state.clone();
+            new_state.runs.push(Run::new(t.clone()));
+            if board {
+                new_state.unused_board_tiles.remove(j);
             }
+            else {
+                new_state.unused_hand_tiles.remove(j);
+            }
+            best = SolvingState::best( best,solve_state(new_state, visited_hashes));
+            if best.is_some() && best.as_ref().unwrap().solved() { return best; }
         }
     }
 
     best.map_or(Some(state), |b| Some(b))
-}
-
-#[time_graph::instrument]
-fn creation_two(state: &SolvingState, visited_hashes: &mut HashSet<u64>, best: &mut Option<SolvingState>, j: usize, t: &Tile, board: &mut bool) -> Option<Option<SolvingState>> {
-    let mut new_state = state.clone();
-    new_state.runs.push(Run::new(t.clone()));
-    if *board {
-        new_state.unused_board_tiles.remove(j);
-    } else {
-        new_state.unused_hand_tiles.remove(j);
-    }
-    *best = SolvingState::best(best.take(), solve_state(new_state, visited_hashes));
-    if best.is_some() && best.as_ref().unwrap().solved() { return Some(best.take()); }
-    None
-}
-
-#[time_graph::instrument]
-fn creation(state: &SolvingState, visited_hashes: &mut HashSet<u64>, best: &mut Option<SolvingState>, j: usize, board: &mut bool, i: usize, new_runs: (Option<Run>, Option<Run>)) -> Option<Option<SolvingState>> {
-    let mut new_state = state.clone();
-    new_state.runs[i] = new_runs.0.unwrap();
-    if new_runs.1.is_some() {
-        new_state.runs.push(new_runs.1.unwrap());
-    }
-    if *board {
-        new_state.unused_board_tiles.remove(j);
-    } else {
-        new_state.unused_hand_tiles.remove(j);
-    }
-    *best = SolvingState::best(best.take(), solve_state(new_state, visited_hashes));
-    if best.is_some() && best.as_ref().unwrap().solved() { return Some(best.take()); }
-    None
 }

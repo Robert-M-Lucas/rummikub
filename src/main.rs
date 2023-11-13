@@ -5,7 +5,7 @@ use std::io::{stdin, stdout, Write};
 use std::str::FromStr;
 use crate::solver::solve;
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Hash)]
 pub enum Colour {
     Red,
     Blue,
@@ -29,7 +29,7 @@ impl Colour {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Hash)]
 pub enum Tile {
     Normal(Colour, u8),
     Joker
@@ -88,7 +88,11 @@ impl Tile {
 
     pub fn to_string(&self) -> String {
         match &self {
-            Tile::Joker => Tile::JOKER_CHAR.to_string(),
+            Tile::Joker => {
+                let mut s = Tile::JOKER_CHAR.to_string();
+                s.push(' ');
+                s
+            },
             Tile::Normal(colour, number) => {
                 format!("{}{} ", colour.get_char(), number)
             }
@@ -149,11 +153,21 @@ impl State {
 }
 
 fn main() {
+    time_graph::enable_data_collection(true);
+
     let mut state = State::new();
 
     let board_init = vec!["r1", "r4", "r12", "b1", "b4", "b12", "y1", "y2", "y3", "x1",
                           "x1", "x2", "x3", "x4", "x4", "x6", "x8", "x12", "j"];
     for t in board_init { state.add_to_board(Tile::from_str(t).unwrap()); }
+    // let hand_init = vec!["y6", "y6", "b9", "x9", "r7", "y7", "r1", "r2", "x8", "x12", "r13"];
+    // for t in hand_init { state.add_to_hand(Tile::from_str(t).unwrap()); }
+    println!("{}", solve(&state).format());
+
+    let graph = time_graph::get_full_graph();
+    println!("{}", graph.as_table());
+
+    return;
 
     loop {
         println!("\n's' to solve");
