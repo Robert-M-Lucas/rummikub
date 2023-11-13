@@ -1,0 +1,241 @@
+use std::collections::VecDeque;
+use crate::{Colour, State, Tile};
+
+#[derive(Clone)]
+pub struct SolvingState {
+    unused_board_tiles: VecDeque<Tile>,
+    unused_hand_tiles: VecDeque<Tile>,
+    runs: Vec<Run>
+}
+
+impl SolvingState {
+    pub fn from_state(state: &State) -> SolvingState {
+        let mut unused_board_tiles = VecDeque::with_capacity(state.board.len());
+        for t in &state.board {
+            unused_board_tiles.push_back(t.clone());
+        }
+        let mut unused_hand_tiles = VecDeque::with_capacity(state.hand.len());
+        for t in &state.hand {
+            unused_hand_tiles.push_back(t.clone());
+        }
+
+        SolvingState { unused_board_tiles, unused_hand_tiles, runs: Vec::new() }
+    }
+
+    pub fn format(&mut self) -> String {
+        let mut string = String::new();
+        for r in &mut self.runs {
+            string += &Tile::format_list(r.tiles.make_contiguous());
+            string.push('\n');
+        }
+
+        string
+    }
+
+    pub fn solved(&self) -> bool {
+        self.completed() == true && self.unused_hand_tiles.len() == 0
+    }
+
+    pub fn completed(&self) -> bool {
+        self.unused_board_tiles.len() == 0 && (self.runs.last().is_none() || self.runs.last().unwrap().tiles.len() >= 3)
+    }
+
+    pub fn best(self, other: Option<SolvingState>) -> Option<SolvingState> {
+        if other.is_none() { return Some(self); }
+
+        let other = other.unwrap();
+        if (other.solved() && !self.solved()) || (other.completed() && !self.completed()) {
+            Some(other)
+        }
+        else {
+            Some(self)
+        }
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum RunType {
+    Number(u8),
+    Colour(Colour, u8, u8),
+    Unknown
+}
+
+#[derive(Clone)]
+struct Run {
+    tiles: VecDeque<Tile>,
+    kind: RunType
+}
+
+impl Run {
+    pub fn new(tile: Tile) -> Run {
+        let mut tiles = VecDeque::with_capacity(3);
+        tiles.push_back(tile);
+        Run { tiles, kind: RunType::Unknown }
+    }
+
+    pub fn join(&self, tile: &Tile) -> (Option<Run>, Option<Run>) {
+        fn prepend(s: &Run, t: &Tile, k: RunType) -> Run {
+            let mut run = s.clone();
+            run.kind = k;
+            run.tiles.push_front(t.clone());
+            run
+        }
+
+        fn append(s: &Run, t: &Tile, k: RunType) -> Run {
+            let mut run = s.clone();
+            run.kind = k;
+            run.tiles.push_back(t.clone());
+            run
+        }
+
+        match &self.kind {
+            RunType::Number(n) => {
+                if self.tiles.len() == 4 { return (None, None); }
+                if tile.is_joker() { return (Some(append(self, tile, RunType::Number(*n))), None); }
+                if tile.number().unwrap() != *n { return (None, None) }
+
+                for t in &self.tiles {
+                    if t.colour() == tile.colour() { return (None, None); }
+                }
+
+                (Some(append(self, tile, RunType::Number(*n))), None)
+            }
+            RunType::Colour(c, min, max) => {
+                if tile.is_joker() {
+                    if *min > 1 && *max < 13  {
+                        return (Some(prepend(self, tile, RunType::Colour(c.clone(), min - 1, *max))),
+                                Some(append(self, tile, RunType::Colour(c.clone(), *min, max + 1))));
+                    }
+                    else if *min > 1 { return (Some(prepend(self, tile, RunType::Colour(c.clone(), min - 1, *max))), None); }
+                    else if *max < 13 { return (Some(append(self, tile, RunType::Colour(c.clone(), *min, max + 1))), None); }
+                }
+
+                if *c != tile.colour().unwrap() { (None, None) }
+                else if tile.number().unwrap() == min - 1 {
+                    (Some(prepend( self, tile, RunType::Colour(c.clone(), min - 1, *max))), None)
+                }
+                else if tile.number().unwrap() == min + 1 {
+                    (Some(append( self, tile, RunType::Colour(c.clone(), *min, max + 1))), None)
+                }
+                else { (None, None) }
+            }
+            RunType::Unknown => {
+                let mut existing = None;
+                let (mut pre_js, mut post_js) = (0, 0);
+
+                for t in &self.tiles {
+                    if t.is_joker() {
+                        if existing.is_none() { pre_js += 1; }
+                        else { post_js += 1; }
+                        continue;
+                    }
+                    existing = Some(t);
+                }
+
+                match existing {
+                    None => {
+                        if tile.is_joker() {
+                            (Some(append(self, tile, RunType::Unknown)), None)
+                        }
+                        else {
+                            (Some(prepend(self, tile, RunType::Unknown)), Some(append(self, tile, RunType::Unknown)))
+                        }
+                    },
+                    Some(existing) => {
+                        if tile.is_joker() {
+                            if existing.number().unwrap() == 1 {
+                                (Some(append(self, tile, RunType::Unknown)), None)
+                            }
+                            else if existing.number().unwrap() == 13 {
+                                (Some(prepend(self, tile, RunType::Unknown)), None)
+                            }
+                            else {
+                                (Some(prepend(self, tile, RunType::Unknown)), Some(append(self, tile, RunType::Unknown)))
+                            }
+                        }
+                        else {
+                            if tile.colour().unwrap() == existing.colour().unwrap() {
+                                if tile.number().unwrap() == existing.number().unwrap() - pre_js - 1 {
+                                    (Some(prepend(self, tile,
+                                                  RunType::Colour(tile.colour().unwrap(),
+                                                    tile.number().unwrap(),
+                                                    existing.number().unwrap() + post_js
+                                                  ))),
+                                     None)
+                                }
+                                else if tile.number().unwrap() == existing.number().unwrap() + post_js + 1 {
+                                    (Some(append(self, tile,
+                                                  RunType::Colour(tile.colour().unwrap(),
+                                                                  existing.number().unwrap() - pre_js,
+                                                                  tile.number().unwrap(),
+                                                  ))),
+                                     None)
+                                }
+                                else {
+                                    (None, None)
+                                }
+                            }
+                            else if self.tiles.len() != 4 && tile.number().unwrap() == existing.number().unwrap() {
+                                (Some(append(self, tile, RunType::Number(tile.number().unwrap()))), None)
+                            }
+                            else {
+                                (None, None)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn solve(state: &State) -> SolvingState {
+    solve_state(SolvingState::from_state(state))
+}
+
+pub fn solve_state(state: SolvingState) -> SolvingState {
+    if state.solved() { return state; }
+
+    let mut best = None;
+
+
+    for (mut j, t) in state.unused_board_tiles.iter().chain(state.unused_hand_tiles.iter()).enumerate() {
+        let mut board = true;
+        if j >= state.unused_board_tiles.len() { j -= state.unused_board_tiles.len(); board = false; }
+
+        for (i, r) in state.runs.iter().enumerate() {
+            let new_runs = r.join(t);
+
+            if new_runs.0.is_some() {
+                let mut new_state = state.clone();
+                new_state.runs[i] = new_runs.0.unwrap();
+                if new_runs.1.is_some() {
+                    new_state.runs.push(new_runs.1.unwrap());
+                }
+                if board {
+                    new_state.unused_board_tiles.remove(j);
+                }
+                else {
+                    new_state.unused_hand_tiles.remove(j);
+                }
+                best = solve_state(new_state).best(best);
+                if best.as_ref().unwrap().solved() { return best.unwrap(); }
+            }
+        }
+
+        if state.runs.last().is_none() || state.runs.last().unwrap().tiles.len() >= 3 {
+            let mut new_state = state.clone();
+            new_state.runs.push(Run::new(t.clone()));
+            if board {
+                new_state.unused_board_tiles.remove(j);
+            }
+            else {
+                new_state.unused_hand_tiles.remove(j);
+            }
+            best = solve_state(new_state).best(best);
+            if best.as_ref().unwrap().solved() { return best.unwrap() }
+        }
+    }
+
+    best.unwrap_or(state)
+}
